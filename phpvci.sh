@@ -31,8 +31,7 @@ readonly PKG_DIR_MODE=555
 readonly PKG_FILE_MODE=444
 
 # Framework repo
-#readonly PACKAGE_REPO_URL="https://github.com/luminovang/framework.git"
-readonly PACKAGE_REPO_URL="/Applications/XAMPP/xamppfiles/htdocs/luminova.code"
+readonly PACKAGE_REPO_URL="https://github.com/luminovang/framework.git"
 
 readonly _OS="$(uname -s)"
 readonly SCRIPT_ENTRY="${BASH_SOURCE[0]}"
