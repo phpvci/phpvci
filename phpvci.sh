@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ------------------------------------------------------------
-# PHP Luminova — Version Control Interface
+# PHP Version Control Interface
 # ------------------------------------------------------------
-# Manages versioned deployments of the Luminova PHP framework
+# Manages versioned deployments of the PHP framework
 # across a shared installation directory.
 #
 # Features:
@@ -25,12 +25,18 @@ if ! (return 0 2>/dev/null); then
     set -euo pipefail
 fi
 
-readonly VERSION="1.3.2"
+readonly VERSION="1.3.4"
 readonly PRODUCTION=1
-readonly SELF_REPO_URL="https://github.com/luminovang/vci.git"
-readonly PACKAGE_REPO_URL="https://github.com/luminovang/framework.git"
+readonly PKG_DIR_MODE=555
+readonly PKG_FILE_MODE=444
+
+# Framework repo
+#readonly PACKAGE_REPO_URL="https://github.com/luminovang/framework.git"
+readonly PACKAGE_REPO_URL="/Applications/XAMPP/xamppfiles/htdocs/luminova.code"
+
 readonly _OS="$(uname -s)"
 readonly SCRIPT_ENTRY="${BASH_SOURCE[0]}"
+readonly SELF_REPO_URL="https://github.com/phpvci/phpvci.git"
 
 SOURCE="$SCRIPT_ENTRY"
 
@@ -67,9 +73,9 @@ _self_name() {
     local self="$1"
 
     if [ -L "$self" ]; then
-        printf "%s\n" "luminova"
+        printf "%s\n" "phpvci"
     else
-        printf "%s\n" "./luminova.sh"
+        printf "%s\n" "./phpvci.sh"
     fi
 }
 
@@ -117,7 +123,7 @@ _help() {
 }
 
 _version() {
-    _print "PHP Luminova — Shared Module Manager"
+    _print "PHP VCI — Shared Module Manager"
     _print "Version: $VERSION" success
     exit 0
 }
@@ -128,13 +134,13 @@ _paths() {
     _include "config"
 
     if [ -z "$where" ]; then
-        _print "Luminova VCI Paths" success
-        _print "LUMINOVA_VCI_SCRIPT_DIR=$SCRIPT_DIR"
+        _print "phpvci paths" success
+        _print "PHPVCI_SCRIPT_DIR=$SCRIPT_DIR"
 
         config_get
     else
-        if config_has "LUMINOVA_PACKAGE_DIR"; then
-            path="$(config_get LUMINOVA_PACKAGE_DIR)"
+        if config_has "PHPVCI_PACKAGE_DIR"; then
+            path="$(config_get PHPVCI_PACKAGE_DIR)"
         else
             path="$SCRIPT_DIR/packages"
         fi
@@ -142,19 +148,19 @@ _paths() {
         case "$where" in
             packages)
                 _print "$path"
-                exit 1
+                exit 0
                 ;;
             release)
-                _print "$path/release"
-                exit 1
+                _print "$path/releases"
+                exit 0
                 ;;
             current)
                 _print "$path/current"
-                exit 1
+                exit 0
                 ;;
             repo)
                 _print "$path/repo"
-                exit 1
+                exit 0
                 ;;
             *)
                 _print "Invalid where command target '$where'" error
@@ -176,10 +182,10 @@ for arg in "$@"; do
         --paths)                  _paths ;;
         -w=*|--where=*)           _paths "${arg#*=}" ;;
 
-        # Package Arguments (luminova package ...) ;;
+        # Package Arguments (phpvci package ...) ;;
 
         --path=*)                 PREFER_PACKAGES_DIR="${arg#*=}" ;;
-        --path)                   PREFER_PACKAGES_DIR="$(pwd)" ;;
+        # --path)                   PREFER_PACKAGES_DIR="$(pwd)" ;;
         -b=*|--branch=*)          TARGET_VERSION="${arg#*=}" ;;
         -l|--list)                COMMAND_ACTION="list" ;;
         -c|--current)             COMMAND_ACTION="show_current" ;;
@@ -187,13 +193,13 @@ for arg in "$@"; do
         -r=*|--remove=*)          COMMAND_ACTION="remove"; REMOVE_ACTION="${arg#*=}" ;;
         -s=*|--switch=*)          COMMAND_ACTION="switch"; TARGET_VERSION="${arg#*=}" ;;
 
-        # Package and Self arguments (luminova [package|self] ...) ;;
+        # Package and Self arguments (phpvci [package|self] ...) ;;
         -i|--install)             COMMAND_ACTION="install" ;;
         -u|--update)              COMMAND_ACTION="update" ;;
         -i=*|--install=*)         COMMAND_ACTION="install"; TARGET_VERSION="${arg#*=}" ;;
         -u=*|--update=*)          COMMAND_ACTION="update"; TARGET_VERSION="${arg#*=}" ;;
 
-        # Self only arguments (luminova self ...) ;;
+        # Self only arguments (phpvci self ...) ;;
         -ui|--uninstall)          COMMAND_ACTION="uninstall" ;;
 
         # Command tools arguments ;;
@@ -235,17 +241,18 @@ fi
 
 _include "config"
 
-
 if [ -n "$PREFER_PACKAGES_DIR" ]; then
     if [ "$SCRIPT_DIR" = "$PREFER_PACKAGES_DIR" ]; then
         readonly PACKAGES_DIR="$PREFER_PACKAGES_DIR/packages"
     else
         readonly PACKAGES_DIR="$PREFER_PACKAGES_DIR"
     fi
-elif config_has "LUMINOVA_PACKAGE_DIR"; then
-    readonly PACKAGES_DIR="$(config_get LUMINOVA_PACKAGE_DIR)"
+elif config_has "PHPVCI_PACKAGE_DIR"; then
+    readonly PACKAGES_DIR="$(config_get PHPVCI_PACKAGE_DIR)"
 else
-    readonly PACKAGES_DIR="$SCRIPT_DIR/packages"
+    packages_dir="$(package_dir "$SCRIPT_DIR")" || exit 1
+    readonly PACKAGES_DIR="$packages_dir"
+    unset packages_dir
 fi
 
 export CONFIG_FILE="$(config_get_file)"
@@ -258,7 +265,7 @@ _require_cmds
 
 # Only root user can run install and update commands
 if ! _is_root; then
-    _print "Luminova VCI '$COMMAND' command requires root privileges." error 0 1
+    _print "phpvci '$COMMAND' command requires root privileges." error 0 1
     _print "Try: sudo $(_cmd "$@")" plain 0 1
 
     exit 1
@@ -290,8 +297,8 @@ fi
 # Require a valid command action
 _command_action_in "$COMMAND_ACTION" "$COMMAND" "$SELF_NAME" 
 
-mkdir -p "$PACKAGES_DIR"
-cd "$PACKAGES_DIR"
+# mkdir -p "$PACKAGES_DIR"
+# cd "$PACKAGES_DIR"
 
 _include "request"
 
@@ -326,6 +333,17 @@ if [ "$COMMAND" != "package" ]; then
     exit 1
 fi
 
+# mkdir -p "$PACKAGES_DIR"
+# cd "$PACKAGES_DIR"
+
+make_package_dir "$PACKAGES_DIR" || exit 1
+
+if ! cd "$PACKAGES_DIR"; then
+    _print "Failed to access packages directory: '$PACKAGES_DIR'." error 1 1
+    exit 1
+fi
+# chmod u+w "$PACKAGES_DIR"
+
 _include "package"
 
 # Query commands (read-only, no build)
@@ -354,11 +372,14 @@ if [ "$COMMAND_ACTION" = "remove" ]; then
 
     case "$REMOVE_ACTION" in
         all)
-            package_clear_modules "$PACKAGES_DIR" "$SCRIPT_DIR" "$FORCE"
+            with_package_permissions "$PACKAGES_DIR" \
+                package_clear_modules "$PACKAGES_DIR" "$SCRIPT_DIR" "$FORCE" ""
             exit $?
             ;;
+
         *)
-            package_remove_module "$PACKAGES_DIR" "$SCRIPT_DIR" "$RESET_TARGET" "$FORCE"
+            with_package_permissions "$PACKAGES_DIR" \
+                package_remove_module "$PACKAGES_DIR" "$SCRIPT_DIR" "$FORCE" "$REMOVE_ACTION"
             exit $?
             ;;
     esac
@@ -368,11 +389,12 @@ _command_action_in "$COMMAND_ACTION" "$COMMAND" "$SELF_NAME" install update
 
 # Package update module check
 if [ "$COMMAND_ACTION" = "update" ]; then
-    package_installed "$RELEASES_DIR" || {
-        _print "No installed luminova package to update" warn
-        _print "Run command '$SELF_NAME --install' first"
+    if ! with_package_permissions "$PACKAGES_DIR" \
+        package_installed "$RELEASES_DIR"; then
+        _print "No installed package module to update" warn
+        _print "Run command '$SELF_NAME --install'"
         exit 1
-    }
+    fi
 fi
 
 # Determine whether source URL is remote or local
@@ -386,7 +408,7 @@ fi
 # Force mode: wipe the existing clone so we start from scratch.
 # Also disables hash check because the repo state is unknown after a wipe.
 if [ "$FORCE" -eq 1 ]; then
-    package_force_delete_repo "$REPO_DIR"
+    with_package_permissions "$PACKAGES_DIR" package_force_delete_repo "$REPO_DIR"
     HASH_CHECK=0
 fi
 
@@ -394,11 +416,16 @@ fi
 if [ "$COMMAND_ACTION" = "update" ]; then
     # Always rebuild on update; skip hash comparison
     HASH_CHECK=0
-    package_clean_repo "$REPO_DIR" "full" 1
+    with_package_permissions "$PACKAGES_DIR" package_clean_repo "$REPO_DIR" "full" 1
 fi
 
 # Clone (remote) or rsync (local) the source into the repo directory
-package_clone_repo "$PACKAGES_DIR" "$REPO_DIR" "$PACKAGE_REPO_URL" "$PULL_ORIGIN_SOURCE" "$TARGET_VERSION"
+with_package_permissions "$PACKAGES_DIR" package_clone_repo \
+    "$PACKAGES_DIR" \
+    "$REPO_DIR" \
+    "$PACKAGE_REPO_URL" \
+    "$PULL_ORIGIN_SOURCE" \
+    "$TARGET_VERSION"
 
 # Auto-detect version from git tags or composer.json when not specified
 if [ -z "$TARGET_VERSION" ]; then
@@ -414,7 +441,8 @@ if [ -z "$TARGET_VERSION" ]; then
         _print "$op_label mode requires a version; no tags found in repo." error 1 1
         _print "Usage: $SELF_NAME --${COMMAND_ACTION}=<version>" plain
         _print "Cleaning up temporary repo clone..." warn
-        package_clean_repo "$REPO_DIR" "full"
+
+        with_package_permissions "$PACKAGES_DIR" package_clean_repo "$REPO_DIR" "full"
         exit 1
     fi
 fi
@@ -430,10 +458,15 @@ _RELEASE_PATH="$RELEASE_PATH"
 _HASH_FILE="$HASH_FILE"
 
 # Bring the repo to the exact requested version
-package_sync_repo "$REPO_DIR" "$PULL_ORIGIN_SOURCE" "$TARGET_VERSION" "$RUNTIME_USER" || true
+with_package_permissions "$PACKAGES_DIR" package_sync_repo \
+    "$REPO_DIR" \
+    "$PULL_ORIGIN_SOURCE" \
+    "$TARGET_VERSION" \
+    "$RUNTIME_USER" || true
 
 # Compute a content fingerprint for change detection
-REPO_HASH="$(request_hash_repo "$REPO_DIR" "$PULL_ORIGIN_SOURCE" "$HASH_ALGO")"
+REPO_HASH="$(with_package_permissions "$PACKAGES_DIR" \
+    request_hash_repo "$REPO_DIR" "$PULL_ORIGIN_SOURCE" "$HASH_ALGO")" 
 
 # Skip rebuild when source is unchanged (install mode only)
 if [ "$HASH_CHECK" -eq 1 ] && [ -f "$HASH_FILE" ]; then
@@ -442,14 +475,20 @@ if [ "$HASH_CHECK" -eq 1 ] && [ -f "$HASH_FILE" ]; then
         _print "No changes detected in $TARGET_VERSION — skipping rebuild." info 1
 
         if [ "$DELETE_REPO" -eq 0 ] && [ "$PULL_ORIGIN_SOURCE" = "local" ]; then
-            package_clean_repo "$REPO_DIR" "full" 1
+            with_package_permissions "$PACKAGES_DIR" \
+                package_clean_repo "$REPO_DIR" "full" 1 || {
+                    exit 1
+                }
         fi
         exit 0
     fi
 fi
 
 # Build the versioned release directory from the repo source
-package_build_repo_structure "$REPO_DIR" "$RELEASE_PATH"
+with_package_permissions "$PACKAGES_DIR" \
+    package_build_repo_structure "$REPO_DIR" "$RELEASE_PATH" || {
+        exit 1
+    }
 
 # Write the hash before creating the symlink so a mid-run crash leaves
 # the release dir without a hash file, triggering cleanup on next run
@@ -460,7 +499,12 @@ if [ -L "$CURRENT_DIR" ]; then
     OLD_VERSION="$(basename "$(realpath "$CURRENT_DIR")")"
 fi
 
-if [ -z "$OLD_VERSION" ] || _version_compare "$TARGET_VERSION" ">" "$OLD_VERSION"; then
+if ! chmod u+w "$PACKAGES_DIR"; then
+    _print "Failed to enable write permission for '$PACKAGES_DIR'." error 1 1
+    return 1
+fi
+
+if [[ -z "$OLD_VERSION" ]] || ! _dir_exists_and_not_empty "$RELEASE_PATH" || _version_compare "$TARGET_VERSION" ">" "$OLD_VERSION"; then
     printf 'Updating current release: %s -> %s\n' \
         "${OLD_VERSION:-none}" \
         "$TARGET_VERSION"
@@ -474,6 +518,12 @@ if [ "$DELETE_REPO" -eq 1 ]; then
     package_clean_repo "$REPO_DIR" "keep_git"
 fi
 
+if ! _dir_exists_and_not_empty "$RELEASE_PATH"; then
+    _print "Package installation failed: release directory for version '$TARGET_VERSION' is missing or empty." error
+    _print "Retry the installation with the --delete and --force flags." warn
+    exit 1
+fi
+
 # _setup "$CONFIG_FILE" "$SELF" "$PACKAGES_DIR"
 
 # Harden the base directory if it isn't already locked at 755
@@ -482,15 +532,17 @@ if ! _is_locked "$SCRIPT_DIR" 755; then
 fi
 
 # Apply the user-requested permission lock to the packages directory
-if [ "${LOCK_PERMISSION:-0}" -eq 1 ]; then
-    _lock_mode="${PERMISSION_MODE:-755}"
+# if [ "${LOCK_PERMISSION:-0}" -eq 1 ]; then
+#     _lock_mode="${PERMISSION_MODE:-555}"
 
-    if _is_locked "$PACKAGES_DIR" "$_lock_mode"; then
-        _print "Permissions already locked ($_lock_mode) on $PACKAGES_DIR. Skipping." info 1
-    else
-        _lock_permission "$PACKAGES_DIR" "$_lock_mode" "$RUNTIME_USER"
-    fi
-fi
+#     if _is_locked "$PACKAGES_DIR" "$_lock_mode"; then
+#         _print "Permissions already locked ($_lock_mode) on $PACKAGES_DIR. Skipping." info 1
+#     else
+#         _lock_permission "$PACKAGES_DIR" "$_lock_mode" "$RUNTIME_USER"
+#     fi
+# fi
+
+lock_package_permissions "$PACKAGES_DIR"
 
 _print "Runtime mode: $RUNTIME_USER active version: $TARGET_VERSION" info 1
 _print "Deployment complete." success 1

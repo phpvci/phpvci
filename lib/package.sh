@@ -20,58 +20,117 @@ package_installed() {
 package_build_repo_structure() {
     local src="$1"
     local dest="$2"
-    local metadata="$dest/.metadata"
+    local metadata
 
-    if [ ! -d "$src" ]; then
-        _print "Source directory not found: $src" error 1 1
-        exit 1
+    if [[ ! -d "$src" ]]; then
+        _print "Source directory not found: '$src'." error 1 1
+        return 1
     fi
 
-    if [ -z "$dest" ]; then
+    if [[ -z "$dest" ]]; then
         _print "Destination path is missing." error 1 1
-        exit 1
+        return 1
     fi
+
+    metadata="$dest/.metadata"
 
     _print "Building release: $(basename "$dest")" info
 
-    mkdir -p \
+    #
+    # Temporarily restore owner permissions for existing releases.
+    # This allows files to be replaced and removed during updates.
+    #
+    if [[ -d "$dest" ]]; then
+        if ! chmod -R u+rwX "$dest" 2>/dev/null; then
+            _print "Failed to prepare release directory '$dest' for updating." error 1 1
+            return 1
+        fi
+    fi
+
+    #
+    # Create required directories
+    #
+    umask 022
+
+    if ! mkdir -p \
         "$dest/system" \
         "$dest/bootstrap" \
-        "$metadata/system" \
-        "$metadata/bootstrap"
+        "$metadata/system"; then
+        _print "Failed to create required directories for '$dest'." error 1 1
+        return 1
+    fi
+
+    for dir in \
+        "$dest" \
+        "$dest/system" \
+        "$dest/bootstrap" \
+        "$metadata" \
+        "$metadata/system"; do
+        if [[ ! -d "$dir" ]]; then
+            _print "Directory does not exist: '$dir'." error 1 1
+            return 1
+        fi
+
+        if ! chmod "$PKG_DIR_MODE" "$dir" 2>/dev/null; then
+            _print "Failed to set permissions for '$dir'." error 1 1
+            return 1
+        fi
+    done
 
     #
     # Capture excluded files BEFORE rsync
     #
     local boot_src="$src/src/Boot.php"
-    local const_src="$src/install/Boot/constants.php"
+    local novakit_cli="$src/novakit"
+    local boot_dest="$metadata/system/Boot.php"
+    local novakit_dest="$metadata/novakit"
+    # local const_src="$src/install/Boot/constants.php"
 
-    if [ -f "$boot_src" ]; then
-        cp -f "$boot_src" "$metadata/system/Boot.php"
+    if [[ -f "$boot_src" ]]; then
+        if ! cp -f "$boot_src" "$boot_dest"; then
+            _print "Failed to copy '$boot_src' to '$boot_dest'." error 1 1
+            return 1
+        fi
     fi
 
-    if [ -f "$const_src" ]; then
-        cp -f "$const_src" "$metadata/bootstrap/constants.php"
+    # if [[ -f "$const_src" ]]; then
+    #     if ! cp -f "$const_src" "$metadata/bootstrap/constants.php"; then
+    #         _print "Failed to copy '$const_src' to '$metadata/bootstrap/constants.php'." error 1 1
+    #         return 1
+    #     fi
+    # fi
+
+    if [[ -f "$novakit_cli" ]]; then
+        if ! cp -f "$novakit_cli" "$novakit_dest"; then
+            _print "Failed to copy '$novakit_cli' to '$novakit_dest'." error 1 1
+            return 1
+        fi
     fi
 
     #
     # Sync system (clean mirror)
     #
-    rsync -a --delete \
+    if ! rsync -a --delete \
         --exclude='Boot.php' \
-        "$src/src/" "$dest/system/"
+        "$src/src/" "$dest/system/"; then
+        _print "Failed to sync system files to '$dest/system/'." error 1 1
+        return 1
+    fi
 
     #
     # Sync bootstrap (clean mirror)
     #
-    rsync -a --delete \
-        --exclude='constants.php' \
-        "$src/install/Boot/" "$dest/bootstrap/"
+    if ! rsync -a --delete \
+        "$src/install/Boot/" "$dest/bootstrap/"; then
+        _print "Failed to sync bootstrap files to '$dest/bootstrap/'." error 1 1
+        return 1
+    fi
 
-    # Ensure runtime is writable if PHP will modify it later
-    # chown -R www-data:www-data "$dest"
-    # chmod -R 775 "$dest"
-    # chmod -R 775 "$dest/system" "$dest/bootstrap" "$metadata/system" "$metadata/bootstrap"
+    #
+    # Make the entire release read-only
+    # Directories: 555
+    # Files: 444
+    return 0
 }
 
 # Print all installed releases, marking the currently active one
@@ -111,12 +170,12 @@ package_clean_repo() {
 
     if [ -z "$path" ] || [ "$path" = "/" ] || [ "$path" = "." ]; then
         [ "$silent" -eq 0 ] && _print "Refusing cleanup — unsafe path: '$path'" error 1 1
-        exit 1
+        return 1
     fi
 
     if [ ! -d "$path" ]; then
         [ "$silent" -eq 0 ] && _print "Repo directory not found: $path" error 1 1
-        exit 1
+        return 1
     fi
 
     case "$filter" in
@@ -130,9 +189,11 @@ package_clean_repo() {
             ;;
         *)
             _print "Unknown cleanup mode: '$filter'" warn 1 1
-            exit 1
+            return 1
             ;;
     esac
+
+    return 0
 }
 
 # Update the current symlink to point to an already-installed release
@@ -146,7 +207,7 @@ package_switch_version() {
     if [ -z "$branch" ]; then
         _print "No version specified for --switch." error 1 1
         _print "Usage: $0 --switch=<version>" plain
-        exit 1
+        return 1
     fi
 
     from_dir="$releases/$branch"
@@ -154,13 +215,13 @@ package_switch_version() {
     if [ ! -d "$from_dir" ]; then
         _print "Release not found: $branch" error 1 1
         _print "Run --list to see installed versions." info
-        exit 1
+        return 1
     fi
 
     _print "Switching to version: $branch..." info
     _create_symlink "$from_dir" "$current" "$base"
     _print "Active version: $branch" success 1
-    exit 0
+    return 0
 }
 
 # Clone from a remote URL, or rsync from a local source, into the repo dir
@@ -177,6 +238,8 @@ package_clone_repo() {
     # elif [ -n "$(find "$location" -mindepth 1 -print -quit 2>/dev/null)" ]; then
     #    _print "Destination already exists and is not empty: $location" warn 0 1
     # fi
+
+    umask 022
 
     mkdir -p "$(dirname "$location")" || return 1
     mkdir -p "$packages" || return 1
@@ -244,8 +307,13 @@ package_clear_modules() {
     local base="${2:-${SCRIPT_DIR}}"
     local force="$3"
 
-    _assert_path "$packages" "$base" || exit 1
-    _confirm_path "$packages" "$force" || exit 1
+    _assert_path "$packages" "$base" || {
+        return 1
+    }
+
+    _confirm_path "$packages" "$force" || {
+        return 1
+    }
 
     _print "Performing full reset of $packages..." warn 1
     rm -rf "$packages/repo" "$packages/releases" "$packages/current"
@@ -253,23 +321,28 @@ package_clear_modules() {
     _clear_temp "$base"
 
     _print "Full reset complete." success 1
+    return 0
 }
 
 # Remove a single release version or the repo clone directory
 package_remove_module() {
     local packages="${1:-${PACKAGES_DIR}}"
     local base="${2:-${SCRIPT_DIR}}"
-    local target="$3"
-    local force="$4"
+    local force="$3"
+    local target="$4"
     local releases="$packages/releases"
     local current="$packages/current"
 
     # Special target: remove only the repo clone directory
     if [ "$target" = "repo" ]; then
         local repo="$packages/repo"
-        _assert_path "$repo" "$base" || exit 1
+        _assert_path "$repo" "$base" || {
+            return 1
+        }
 
-        _confirm_path "$repo" "$force" || exit 1
+        _confirm_path "$repo" "$force" || {
+            return 1
+        }
 
         rm -rf "$repo"
         _print "Repo directory removed." success 1
@@ -284,8 +357,12 @@ package_remove_module() {
         return 1
     fi
 
-    _assert_path "$version" "$base" || exit 1
-    _confirm_path "$version" "$force" || exit 1
+    _assert_path "$version" "$base" || {
+        return 1
+    }
+    _confirm_path "$version" "$force" || {
+        return 1
+    }
 
     _print "Removing release: $target..." warn
     rm -rf "$version"
@@ -311,6 +388,8 @@ package_remove_module() {
             _clear_temp "$base"
         fi
     fi
+
+    return 0
 }
 
 # Print the currently active release version and exit
@@ -320,7 +399,7 @@ package_current_release() {
 
     if [ ! -L "$link" ] && [ ! -d "$link" ]; then
         _print "No active release found. Nothing has been deployed yet." info 1
-        exit 0
+        return 1
     fi
 
     local resolved current
@@ -328,17 +407,56 @@ package_current_release() {
 
     if [ -z "$resolved" ]; then
         _print "Active symlink exists but does not resolve. It may be broken." warn 1
-        exit 1
+        return 1
     fi
 
     current="$(basename "$resolved")"
 
     if [ -z "$current" ] || [ "$current" = "current" ]; then
         _print "Active symlink is broken or unresolvable." warn 1
-        exit 1
+        return 1
     fi
 
-    _print "Active Luminova release:" info
+    _print "Active package release:" info
     _print "$current" success
-    exit 0
+    return 0
+}
+
+# Lock all package files
+lock_package_permissions() {
+    local dir="${1:-$PACKAGES_DIR}"
+    local path
+
+    if [[ ! -d "$dir" ]]; then
+        _print "Package directory does not exist: $dir" error 1 1
+        return 1
+    fi
+
+    # Make all package files readable by everyone
+    if ! find "$dir" -type f -exec chmod "$PKG_FILE_MODE" {} +; then
+        _print "Failed to set package file permissions." error 1 1
+    fi
+
+    # Make all package directories accessible by everyone
+    if ! find "$dir" -type d -exec chmod "$PKG_DIR_MODE" {} +; then
+        _print "Failed to set package directory permissions." error 1 1
+    fi
+
+    # Lock all package files
+    # while IFS= read -r -d '' path; do
+    #     if ! _lock_permission "$path" "$PKG_FILE_MODE"; then
+    #         _print "Failed to set package file permissions: $path" error 1 1
+    #         return 1
+    #     fi
+    # done < <(find "$dir" -type f -print0)
+
+    # # Lock all package directories
+    # while IFS= read -r -d '' path; do
+    #     if ! _lock_permission "$path" "$PKG_DIR_MODE"; then
+    #         _print "Failed to set package directory permissions: $path" error 1 1
+    #         return 1
+    #     fi
+    # done < <(find "$dir" -type d -print0)
+
+    return 0
 }

@@ -4,14 +4,50 @@
 _cleanup_trap() {
     local code=$?
 
-    if [ "$code" -ne 0 ] \
-        && [ -n "$_RELEASE_PATH" ] \
-        && [ -d "$_RELEASE_PATH" ] \
-        && [ -n "$_HASH_FILE" ] \
-        && [ ! -f "$_HASH_FILE" ]; then
-        _print "Cleaning up incomplete release: $_RELEASE_PATH" warn 1
-        rm -rf "$_RELEASE_PATH"
+    if [[ -n "${PACKAGES_DIR:-}" ]]; then
+        restore_package_permissions "$PACKAGES_DIR"
     fi
+
+    if [[ "$code" -ne 0 ]] \
+        && [[ -n "${_RELEASE_PATH:-}" ]] \
+        && [[ -d "$_RELEASE_PATH" ]] \
+        && [[ -n "${_HASH_FILE:-}" ]] \
+        && [[ ! -f "$_HASH_FILE" ]]; then
+        _print "Cleaning up incomplete release: $_RELEASE_PATH" warn 1
+        rm -rf -- "$_RELEASE_PATH"
+    fi
+
+    return "$code"
+}
+
+restore_package_permissions() {
+    [[ -z "$1" ]] && return 1
+    chmod "$PKG_DIR_MODE" "$1" 2>/dev/null
+}
+
+with_package_permissions() {
+    local dir="$1"
+    shift
+
+    if [[ -z "$dir" ]]; then
+        _print "Package directory is not defined." error 1 1
+        return 1
+    fi
+
+    if ! chmod u+w "$dir"; then
+        _print "Failed to enable write permission for '$dir'." error 1 1
+        return 1
+    fi
+
+    "$@"
+    local status=$?
+
+    if ! restore_package_permissions "$dir"; then
+        _print "Failed to restore read-only permissions for '$dir'." error 1 1
+        return 1
+    fi
+
+    return "$status"
 }
 
 _setup() {
@@ -39,22 +75,22 @@ _setup() {
     # -----------------------------
     # Resolve binary path
     # -----------------------------
-    if config_has "LUMINOVA_VCI_BIN"; then
-        bin_file="$(config_get "LUMINOVA_VCI_BIN")"
+    if config_has "PHPVCI_BIN"; then
+        bin_file="$(config_get "PHPVCI_BIN")"
     fi
 
     # -----------------------------
     # Resolve package directory
     # -----------------------------
-    if config_has "LUMINOVA_PACKAGE_DIR"; then
-        old_packages="$(config_get "LUMINOVA_PACKAGE_DIR")"
+    if config_has "PHPVCI_PACKAGE_DIR"; then
+        old_packages="$(config_get "PHPVCI_PACKAGE_DIR")"
 
         if [ -n "$old_packages" ] && [ "$old_packages" != "$packages" ]; then
 
             if [ "$is_update_pkg_path" -eq 0 ]; then
                 _print "Mixed target package directory" warn
             else
-                _print "Changing luminova package target directory" info
+                _print "Changing phpvci package target directory" info
             fi
             
             _print "Previous package directory: $old_packages" plain
@@ -74,8 +110,8 @@ _setup() {
                 fi
             else
                 config_write "$config_file" \
-                    "LUMINOVA_VCI_CONF=$config_file" \
-                    "LUMINOVA_VCI_BIN=$bin_file"
+                    "PHPVCI_CONF=$config_file" \
+                    "PHPVCI_BIN=$bin_file"
                     
                 return 1
                 # packages="$old_packages"
@@ -87,9 +123,9 @@ _setup() {
     # Write config atomically
     # -----------------------------
     config_write "$config_file" \
-        "LUMINOVA_VCI_CONF=$config_file" \
-        "LUMINOVA_PACKAGE_DIR=$packages" \
-        "LUMINOVA_VCI_BIN=$bin_file" || {
+        "PHPVCI_CONF=$config_file" \
+        "PHPVCI_PACKAGE_DIR=$packages" \
+        "PHPVCI_BIN=$bin_file" || {
 
         if [ "$is_update_pkg_path" -eq 1 ]; then
             _print "Failed to update package configuration" error 0 1
@@ -102,8 +138,7 @@ _setup() {
     # Move data if required
     # -----------------------------
     if [ "$move_data" -eq 1 ] && [ -n "$old_packages" ] && [ -d "$old_packages" ]; then
-        mkdir -p "$packages" || {
-            _print "Failed to create target package directory" error 0 1
+        make_package_dir "$packages" || {
             return 1
         }
 
@@ -120,7 +155,7 @@ _setup() {
     fi
 
     if [ "$is_update_pkg_path" -eq 1 ]; then
-        _print "Luminova package directory was updated" success
+        _print "Package directory was updated" success
         _print "New package directory: $packages" plain
     fi
 
@@ -149,6 +184,10 @@ _in_path() {
 # True if string matches X.Y.Z semver
 _is_version() {
     [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]
+}
+
+_dir_exists_and_not_empty() {
+    [[ -d "$1" ]] && find "$1" -mindepth 1 -maxdepth 1 -print -quit | grep -q .
 }
 
 _skip_version() {
@@ -533,7 +572,7 @@ _confirm_path() {
 # Create a temp file or directory in a given dir with a sanitized name prefix
 _make_temp() {
     local type="${1:-file}"
-    local dir="${2:-${TMPDIR:-/tmp}/luminova}"
+    local dir="${2:-${TMPDIR:-/tmp}/phpvci}"
     local name="${3:-test}"
 
     # local tmp="$(config_path 2>/dev/null)" || true
@@ -664,13 +703,15 @@ _lock_permission() {
     chown -R "$user_group" "$path" 2>/dev/null \
         || _print "Ownership change skipped (insufficient permissions)." info 1
 
-    if [ "$runtime" = "root" ]; then
-        chmod -R "$mode" "$path"
-    else
-        chmod -R "$mode" "$path" 2>/dev/null || true
-    fi
+    chmod -R "$mode" "$path" 2>/dev/null || {
+        if [ "$runtime" = "root" ]; then
+            _print "Failed to applied permission ($mode)." error 1
+            return 1
+        fi
+    }
 
     _print "Permissions applied ($mode)." success 1
+    return 0
 }
 
 _clear_temp() {
